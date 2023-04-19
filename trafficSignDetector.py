@@ -9,23 +9,30 @@ from keras.callbacks import LearningRateScheduler, EarlyStopping
 from keras.preprocessing.image import ImageDataGenerator
 from matplotlib import pyplot as plt
 import seaborn as sns
-from sklearn.metrics import accuracy_score, roc_curve, auc
+from sklearn.metrics import accuracy_score
 from tensorflow import keras
 import numpy as np
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten, GlobalAveragePooling2D, BatchNormalization, Activation
-from keras.layers import Conv2D, MaxPooling2D
-from keras import backend as K
+from keras.layers import Dense, Dropout, GlobalAveragePooling2D
 
+import warnings
+
+warnings.filterwarnings('ignore')
+
+# -------------------------------------------------- Data Preparation --------------------------------------------------
+# ---------------------------------------------- Only need to be run once ----------------------------------------------
 
 data_dir = r'./data'
 train_dir = r'./train'
 test_dir = r'./test'
-classList = list(range(0, 58))
-classList = [str(i) for i in classList]
+
 trainSize = 0.8
-num_classes = 58
+num_classes = 59
 batch_size = 64
+classList = list(range(0, num_classes))
+classList = [str(i) for i in classList]
+
+# ------------------------------------------- Train and Test Data Creator ----------------------------------------------
 
 # Create directory for the training and testing sets and copy images
 os.mkdir(train_dir)
@@ -53,11 +60,12 @@ for i in classList:
         dst = os.path.join(test_dir_i, test_file)
         shutil.copyfile(src, dst)
 
+# ---------------------------------------- End of Train and Test data creation -----------------------------------------
+# --------------------------------------------------- Model training ---------------------------------------------------
+
 # Create ImageDataGenerator objects to preprocess & augment data and load images dynamically during training
 trainDatagen = ImageDataGenerator(
     preprocessing_function=preprocess_input,
-    # For efficient net model, input preprocessing is included as part of the model (as a Rescaling layer),
-    # and thus tf.keras.applications.efficientnet.preprocess_input is actually a pass-through function
     rotation_range=20,
     width_shift_range=0.2,
     height_shift_range=0.2,
@@ -90,7 +98,6 @@ test_data = testDatagen.flow_from_directory(
     shuffle=False
 )
 
-
 # Load a pre-trained model. include_top=False means we drop the last layer so that we can add our own to fine-tune
 EfficientNetModel = EfficientNetB0(weights='imagenet', include_top=False)  # EfficientNetB0 input size is (224, 224, 3)
 
@@ -117,15 +124,17 @@ def step_decay(epoch):
     lr = initial_lr * (drop_rate ** math.floor((1+epoch)/epochs_drop))
     return lr
 
+
 # Then we need to create a LearningRateScheduler object using our step decay function
 lr_scheduler = LearningRateScheduler(step_decay)
+
 # 2. EarlyStopping Callback: Stops the training when validation error plateaus
 early_stop = EarlyStopping(monitor='val_loss', patience=5)
 
 # Train the model
 model.fit(train_data,
           batch_size=batch_size,
-          epochs=50,
+          epochs=100,
           verbose=2,
           validation_data=test_data,
           callbacks=[lr_scheduler, early_stop])
@@ -138,28 +147,48 @@ accuracy = accuracy_score(y_true, y_pred)
 print(accuracy)
 
 
-# Test a new photo
-image = cv2.imread('testImage.jpg')  # Read the image file
+model.save('singleSignDetectionModel.h5')
+
+# ----------------------------------------------- End of model training ------------------------------------------------
+
+# Load the model
+model = keras.models.load_model('singleSignDetectionModel.h5')
+
+def detectTrafficSign(model, imageName):
+    # Test the model with a new photo
+    image = cv2.imread(imageName)  # Read the image file
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # cv2 read image as BGR, so we need to convert it to RGB
+    plt.imshow(image)
+    plt.show()
+    # Preprocess the image
+    # Resize
+    imageResized = cv2.resize(image, (224, 224))
+    # Add to an empty nparray with only 1 image size
+    imageFinal = np.empty((1, 224, 224, 3), dtype=np.uint8)
+    imageFinal[0] = imageResized
+    predictionProbability = model.predict(imageFinal)
+    prediction = np.argmax(predictionProbability, axis=1)
+    return prediction
+
+detectTrafficSign(model, '7.png')[0]
+
+# Detect multiple signs
+
+imageName = '7.png'
+
+image = cv2.imread(imageName)  # Read the image file
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # cv2 read image as BGR, so we need to convert it to RGB
 plt.imshow(image)
 plt.show()
 # Preprocess the image
 # Resize
 imageResized = cv2.resize(image, (224, 224))
-plt.imshow(imageResized)
-plt.show()
 # Add to an empty nparray with only 1 image size
 imageFinal = np.empty((1, 224, 224, 3), dtype=np.uint8)
 imageFinal[0] = imageResized
-# We only need to perform a resize since in efficient net model the rescaling (Normalization) is done on the training
-# level
 predictionProbability = model.predict(imageFinal)
 prediction = np.argmax(predictionProbability, axis=1)
-
-
-
-
-
+return prediction
 
 
 
