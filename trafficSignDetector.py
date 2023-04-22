@@ -64,6 +64,8 @@ for i in classList:
 # ---------------------------------------- End of Train and Test data creation -----------------------------------------
 # --------------------------------------------------- Model training ---------------------------------------------------
 
+label_map = {str(i): i for i in range(num_classes)}
+
 # Create ImageDataGenerator objects to preprocess & augment data and load images dynamically during training
 trainDatagen = ImageDataGenerator(
     preprocessing_function=preprocess_input,
@@ -84,7 +86,8 @@ train_data = trainDatagen.flow_from_directory(
     color_mode='rgb',
     batch_size=batch_size,  # This HAS TO match the training batch size
     class_mode='categorical',
-    shuffle=True  # This allows us to mix the training inout from different folders
+    shuffle=True,  # This allows us to mix the training inout from different folders,
+    classes=label_map
 )
 
 test_data = testDatagen.flow_from_directory(
@@ -93,8 +96,11 @@ test_data = testDatagen.flow_from_directory(
     color_mode='rgb',
     batch_size=batch_size,
     class_mode='categorical',
-    shuffle=False
+    shuffle=False,
+    classes=label_map
 )
+
+print(test_data.class_indices)
 
 # Load a pre-trained model. include_top=False means we drop the last layer so that we can add our own to fine-tune
 EfficientNetModel = EfficientNetB0(weights='imagenet', include_top=False)  # EfficientNetB0 input size is (224, 224, 3)
@@ -128,7 +134,7 @@ def step_decay(epoch):
 lr_scheduler = LearningRateScheduler(step_decay)
 
 # 2. EarlyStopping Callback: Stops the training when validation error plateaus
-early_stop = EarlyStopping(monitor='val_loss', patience=10)
+early_stop = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
 # Train the model
 model.fit(train_data,
@@ -145,14 +151,6 @@ y_pred = np.argmax(predictionProbability, axis=1)
 accuracy = accuracy_score(y_true, y_pred)
 print(accuracy)
 
-'''
-y_true = test_data.classes
-td = pd.DataFrame(y_true)
-df = td[0].value_counts()
-df = df.sort_index()
-print(test_data.class_indices)
-'''
-
 model.save('singleSignDetectionModel.h5')
 
 # ----------------------------------------------- End of model training ------------------------------------------------
@@ -160,12 +158,7 @@ model.save('singleSignDetectionModel.h5')
 # Load the model
 model = keras.models.load_model('singleSignDetectionModel.h5')
 
-def detectTrafficSign(model, imageName):
-    # Test the model with a new photo
-    image = cv2.imread(imageName)  # Read the image file
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # cv2 read image as BGR, so we need to convert it to RGB
-    plt.imshow(image)
-    plt.show()
+def detectTrafficSign(model, image):
     # Preprocess the image
     # Resize
     imageResized = cv2.resize(image, (224, 224))
@@ -176,88 +169,117 @@ def detectTrafficSign(model, imageName):
     prediction = np.argmax(predictionProbability, axis=1)
     return prediction
 
-detectTrafficSign(model, '1.png')[0]
-detectTrafficSign(model, '2.png')[0]
-detectTrafficSign(model, '3.png')[0]
-detectTrafficSign(model, '4.png')[0]
 
-# Detect multiple signs
-
-imageName = '1.png'
-
-image = cv2.imread(imageName)  # Read the image file
+# Test the single sign model
+image = cv2.imread('singleSignTest_0.png')  # Read the image file
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # cv2 read image as BGR, so we need to convert it to RGB
 plt.imshow(image)
 plt.show()
-# Preprocess the image
-# Resize
-imageResized = cv2.resize(image, (224, 224))
-# Add to an empty nparray with only 1 image size
-imageFinal = np.empty((1, 224, 224, 3), dtype=np.uint8)
-imageFinal[0] = imageResized
-predictionProbability = model.predict(imageFinal)
-prediction = np.argmax(predictionProbability, axis=1)
-prediction
+detectTrafficSign(model, image)[0]
+# This correctly predicts the sign
 
-
-def detect_and_mark_traffic_signs(image_path, x_offset=0, y_offset=0):
-    # Load the image and convert to RGB
-    image = cv2.imread(image_path)
+def detect_multiple_traffic_signs(model, image_name, corners):
+    image = cv2.imread(image_name)
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    # height, width, _ = image.shape
 
-    # Base case
-    traffic_sign_class = detectTrafficSign(image_path)
+    def recursive_detection(model, image, corners):
+        class_label = detectTrafficSign(model, image)[0]
+        if class_label == 3:
+            return [], []
+        height, width, _ = image.shape
+        print('current image size:', width, ',', height)
 
-    # No traffic sign detected
-    if traffic_sign_class == 58:
-        return []
+        minimumSize = 100
+        if image.shape[0] < minimumSize or image.shape[1] < minimumSize:
+            return [corners], [class_label]
 
+        half_height, half_width = height // 2, width // 2
+
+        sub_image_corners = [
+            ((corners[0][0], corners[0][1]),
+             (corners[0][0] + half_width, corners[0][1]),
+             (corners[0][0], corners[0][1] + half_height),
+             (corners[0][0] + half_width, corners[0][1] + half_height)),
+
+            ((corners[0][0] + half_width, corners[0][1]),
+             (corners[0][0] + width, corners[0][1]),
+             (corners[0][0] + half_width, corners[0][1] + half_height),
+             (corners[0][0] + width, corners[0][1] + half_height)),
+
+            ((corners[0][0], corners[0][1] + half_height),
+             (corners[0][0] + half_width, corners[0][1] + half_height),
+             (corners[0][0], corners[0][1] + height),
+             (corners[0][0] + half_width, corners[0][1] + height)),
+
+            ((corners[0][0] + half_width, corners[0][1] + half_height),
+             (corners[0][0] + width, corners[0][1] + half_height),
+             (corners[0][0] + half_width, corners[0][1] + height),
+             (corners[0][0] + width, corners[0][1] + height))
+        ]
+
+        sub_images = [
+            image[0:half_height, 0:half_width],
+            image[0:half_height, half_width:width],
+            image[half_height:height, 0:half_width],
+            image[half_height:height, half_width:width]
+        ]
+
+        all_corners = []
+        all_classes = []
+
+        for i in range(4):
+            print(f"Sub-image {i + 1} corners: {sub_image_corners[i]}")
+            sub_corners, sub_classes = recursive_detection(model, sub_images[i], sub_image_corners[i])
+            all_corners.extend(sub_corners)
+            all_classes.extend(sub_classes)
+
+        if not all_corners:
+            return [corners], [class_label]
+
+        if class_label not in all_classes:
+            all_corners.append(corners)
+            all_classes.append(class_label)
+
+        return all_corners, all_classes
+
+    final_corners, final_classes = recursive_detection(model, image, corners)
+
+    # image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    for i, corner in enumerate(final_corners):
+        cv2.rectangle(image, corner[0], corner[3], (0, 255, 0), 2)
+        cv2.putText(image, str(final_classes[i]), corner[0], cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
+    plt.imshow(image)
+    plt.show()
+    # cv2.imwrite("output_" + image_name, image)
+
+
+# Example usage:
+image_name = "finalTest.png"
+corners = [(0, 0), (999, 0), (0, 669), (999, 669)]
+detect_multiple_traffic_signs(model, image_name, corners)
+
+
+# The following function is reserved for de-bugging
+def imageDivider(imageName):
+    image = cv2.imread(imageName)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    plt.imshow(image)
+    plt.show()
     height, width, _ = image.shape
-    # Check if the image can be divided further
-    min_sub_image_size = 20
-    if height < min_sub_image_size or width < min_sub_image_size:
-        return [(x_offset + width // 2, y_offset + height // 2, traffic_sign_class)]
-
-    # Divide the image into 4 sub-images
-    x_mid = width // 2
-    y_mid = height // 2
-
+    half_height, half_width = height // 2, width // 2
     sub_images = [
-        (image[:y_mid, :x_mid], x_offset, y_offset),
-        (image[:y_mid, x_mid:], x_offset + x_mid, y_offset),
-        (image[y_mid:, :x_mid], x_offset, y_offset + y_mid),
-        (image[y_mid:, x_mid:], x_offset + x_mid, y_offset + y_mid),
+        image[0:half_height, 0:half_width],
+        image[0:half_height, half_width:width],
+        image[half_height:height, 0:half_width],
+        image[half_height:height, half_width:width]
     ]
-
-    results = []
-
-    # Save and process each sub-image
-    for sub_image, x, y in sub_images:
-        sub_image_path = f"temp_{x}_{y}.png"
-        cv2.imwrite(sub_image_path, cv2.cvtColor(sub_image, cv2.COLOR_RGB2BGR))
-        sub_results = detect_and_mark_traffic_signs(sub_image_path, x, y)
-        results.extend(sub_results)
-
-    return results
+    for i in range(4):
+        plt.imshow(sub_images[i])
+        plt.show()
+        image = cv2.cvtColor(sub_images[i], cv2.COLOR_RGB2BGR)
+        cv2.imwrite("output_" + image_name + '_' + str(i) + '.png', image)
 
 
 
-
-# Input and output image paths
-input_image_path = "input_image.png"
-output_image_path = "output_image.png"
-
-# Load the input image and convert to RGB
-input_image = cv2.imread(input_image_path)
-input_image = cv2.cvtColor(input_image, cv2.COLOR_BGR2RGB)
-
-# Detect and mark traffic signs
-detections = detect_and_mark_traffic_signs(input_image_path)
-
-# Draw rectangles around detected signs and label them
-for x, y, traffic_sign_class in detections:
-    cv2.rectangle(input_image, (x - 20, y - 20), (x + 20, y + 20), (0, 255, 0), 2)
-    cv2.putText(input_image, f"Class {traffic_sign_class}", (x - 20, y - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-# Save the marked image
-cv2.imwrite(output_image_path, cv2.cvtColor(input_image, cv2.COLOR_RGB2BGR))
