@@ -15,6 +15,8 @@ from tensorflow import keras
 import numpy as np
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, GlobalAveragePooling2D
+import tensorflow as tf
+from tensorflow.keras import backend as K
 
 import warnings
 
@@ -117,7 +119,14 @@ model.add(Dense(64, activation='relu'))
 model.add(Dropout(0.2))
 model.add(Dense(num_classes, activation='softmax'))
 
-model.compile(loss='categorical_crossentropy', metrics=['accuracy'], optimizer=keras.optimizers.Adam(learning_rate=0.01))
+def focal_loss(alpha=0.25, gamma=2.0):
+    def focal_loss_fixed(y_true, y_pred):
+        pt_1 = tf.where(tf.equal(y_true, 1), y_pred, tf.ones_like(y_pred))
+        pt_0 = tf.where(tf.equal(y_true, 0), y_pred, tf.zeros_like(y_pred))
+        return -K.sum(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1 + K.epsilon())) - K.sum((1 - alpha) * K.pow(pt_0, gamma) * K.log(1. - pt_0 + K.epsilon()))
+    return focal_loss_fixed
+
+model.compile(loss=focal_loss(alpha=0.25, gamma=2.0), metrics=['accuracy'], optimizer=keras.optimizers.Adam(learning_rate=0.01))
 model.summary()
 
 
